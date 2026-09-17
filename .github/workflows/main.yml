@@ -192,6 +192,17 @@ jobs:
           PIN_KERNELSU="3c1240625655978f319a98398031100b80e9da7c"
           PIN_RESUKISU="3c1882886dbbb54f4aae7ddf205f8ccde32c2a34"
           PIN_SUKISU_ULTRA="b20dee702035af09cb2ecb5f35443bbc1747f3e6"
+          # Manager APK source for SukiSU-Ultra. SUSFS builds take the kernel from the
+          # 'builtin' branch, whose KERNEL_SU_UAPI_VERSION is 2, while 'main' moved to 3
+          # (2026-09-06) and 4 (2026-09-07, dda78702be "new version matching detection
+          # mechanism", #3516). A main-tip manager therefore reports managerUAPIVersion 4
+          # > kernelUAPIVersion 2: it warns that the kernel must be updated and skips
+          # rendering its entire bottom navigation (no settings/superuser/module pages).
+          # Pin the manager to the last 'main' build that still spoke UAPI 2 -- the
+          # build-manager run for the commit below (run 33510442070, 2026-09-01).
+          # Re-check this pair (and refresh the pin) once 'builtin' is rebased onto uapi 4.
+          PIN_SUKISU_ULTRA_MANAGER="9fbe8fe8ca90c62c259c5894bf96d02ac31209b9"
+          emit sukisu_ultra_manager_commit "$PIN_SUKISU_ULTRA_MANAGER"
           declare -A PIN_SUSFS=(
             [susfs_commit_android12_5_10]="ec785f47d49f7b3871ca9356f450411020af7017"
             [susfs_commit_android13_5_10]="ed3d6d9c9a2652e1c70f153f5358701e996d646c"
@@ -434,11 +445,26 @@ jobs:
                 ;;
               sukisu-ultra)
                 owner="SukiSU-Ultra"; repo="SukiSU-Ultra"; wf="build-manager.yml"
-                stock=$(git ls-remote https://github.com/SukiSU-Ultra/SukiSU-Ultra.git refs/heads/main | awk '{print $1; exit}')
+                # SUSFS builds use the 'builtin' kernel (UAPI 2), so the manager must come
+                # from a 'main' commit that still reported UAPI 2, otherwise the manager
+                # hides its whole bottom navigation. See PIN_SUKISU_ULTRA_MANAGER above.
+                pinned_manager=""
+                if [ "${{ inputs.use_susfs }}" = "true" ]; then
+                  pinned_manager="${{ steps.resolve.outputs.sukisu_ultra_manager_commit }}"
+                  stock="$pinned_manager"
+                  echo "SUSFS build: using pinned SukiSU-Ultra manager build ${stock} (UAPI 2 line)" >&2
+                else
+                  stock=$(git ls-remote https://github.com/SukiSU-Ultra/SukiSU-Ultra.git refs/heads/main | awk '{print $1; exit}')
+                fi
                 run_id=$(gh api "repos/${owner}/${repo}/actions/workflows/${wf}/runs?head_sha=${stock}" \
                   --jq '.workflow_runs[0].id // empty')
                 if [[ -z "${run_id}" ]]; then
-                  echo "No manager build for stock ${stock}, falling back to latest successful run" >&2
+                  if [ -n "$pinned_manager" ]; then
+                    echo "WARNING: no ${repo} manager build found for pinned commit ${stock} (artifact expired or run deleted)" >&2
+                    echo "WARNING: falling back to a main-tip manager, which will be UAPI-mismatched with the 'builtin' kernel and hide its settings page -- refresh PIN_SUKISU_ULTRA_MANAGER" >&2
+                  else
+                    echo "No manager build for stock ${stock}, falling back to latest successful run" >&2
+                  fi
                   fb=$(gh api "repos/${owner}/${repo}/actions/workflows/${wf}/runs?branch=main&status=success&per_page=1")
                   run_id=$(echo "$fb" | jq -r '.workflow_runs[0].id // empty')
                   stock=$(echo "$fb" | jq -r '.workflow_runs[0].head_sha // empty')
