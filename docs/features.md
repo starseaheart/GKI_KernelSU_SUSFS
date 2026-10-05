@@ -89,7 +89,7 @@ Kernel-based su and root access management for Android.
 
 | Feature | Description | Source |
 |---------|-------------|--------|
-| Virtual USB DAC | Opt-in via the `use_vdac` build input: `CONFIG_USB_DUMMY_HCD=y` adds a software UDC (`dummy_udc.0` / `dummy_hcd.0`) so the phone can host an f_uac2 gadget while its real controller stays USB host for the physical DAC; `CONFIG_SND_VERBOSE_PROCFS=y` makes `/proc/asound/cardN/pcmXp/sub0/` exist for the gadget card, which has no `stream0`. Both have to be built in — `usb_gadget_probe_driver` is not exported by GKI. | kernel config |
+| Virtual USB DAC | Opt-in via the `use_vdac` build input: `CONFIG_USB_DUMMY_HCD=y` adds a software UDC (`dummy_udc.0` / `dummy_hcd.0`) so the phone can host an f_uac2 gadget while its real controller stays USB host for the physical DAC. It has to be built in — `usb_gadget_probe_driver` is not exported by GKI. `CONFIG_SND_VERBOSE_PROCFS` is deliberately **not** set: it changes the layout of `struct snd_pcm_str`, which under `CONFIG_MODVERSIONS=y` changes the CRC of every exported `snd_*` symbol and makes all prebuilt vendor audio modules unloadable (no sound card, audioserver never starts, boot hangs). | kernel config |
 
 ---
 

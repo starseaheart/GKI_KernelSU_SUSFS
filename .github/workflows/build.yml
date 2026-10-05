@@ -362,16 +362,24 @@ jobs:
     # Virtual USB DAC (config only). dummy_hcd provides dummy_udc.0 / dummy_hcd.0
     # so f_uac2 can be bound to a software UDC while the phone stays USB host for
     # the real DAC; it cannot be shipped as an external module because
-    # usb_gadget_probe_driver is not exported by GKI. SND_VERBOSE_PROCFS makes
-    # /proc/asound/cardN/pcmXp/sub0/ exist for both cards, which the gadget card
-    # needs (it has no stream0).
+    # usb_gadget_probe_driver is not exported by GKI.
+    #
+    # Do NOT add CONFIG_SND_VERBOSE_PROCFS=y here. It looks harmless (it only
+    # adds /proc/asound/cardN/pcmXp/sub0/{hw_params,status}), but it changes the
+    # layout of struct snd_pcm_str, and with CONFIG_MODVERSIONS=y that changes
+    # the genksyms CRC of every exported snd_* symbol. Every prebuilt vendor
+    # audio module (wcd_core_dlkm, cs35l43_dlkm, tas25xx_dlkm, hdmi_dlkm,
+    # snd_soc_hdmi_codec, typec_analog_acc_dlkm, ...) then refuses to load with
+    # "disagrees about version of symbol snd_soc_*", no sound card is
+    # registered, audioserver never finds android.hardware.audio.core.IModule,
+    # and Android hangs forever on the boot animation. Verified on onyx
+    # 2026-10-05: 14 modules failed, /proc/asound/cards was empty.
     - name: Virtual USB DAC kernel support
       if: contains(inputs.feature_set, 'VDAC')
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_USB_DUMMY_HCD=y
-          CONFIG_SND_VERBOSE_PROCFS=y
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_UAC2=y
