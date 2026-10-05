@@ -106,6 +106,14 @@ on:
         description: "Performance"
         type: boolean
         default: false
+      use_vdac:
+        description: "Virtual USB DAC: dummy_hcd software UDC + SND_VERBOSE_PROCFS"
+        type: boolean
+        default: false
+      use_tcpbrutal:
+        description: "TCP Brutal congestion control built into the kernel"
+        type: boolean
+        default: false
       test_release_notes:
         description: "Render release notes preview only (skip all builds + release)"
         type: boolean
@@ -149,6 +157,7 @@ jobs:
       kernel_patches_commit: ${{ steps.resolve.outputs.kernel_patches_commit }}
       anykernel3_commit: ${{ steps.resolve.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ steps.resolve.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ steps.resolve.outputs.tcp_brutal_commit }}
       feature_set: ${{ steps.features.outputs.feature_set }}
       manager_list: ${{ steps.manager.outputs.manager_list }}
     steps:
@@ -189,6 +198,15 @@ jobs:
 
           # Audited pins (from root-variants.yml). Used only when commit_mode=verified.
           PIN_NOMOUNT="d0f57d5c37ff02aae2299daded57919153240cb3"
+          # TCP Brutal (HyNetworks/tcp-brutal, formerly apernet/tcp-brutal) is an
+          # out-of-tree congestion control. GKI keeps only KMI exports
+          # (CONFIG_TRIM_UNUSED_KSYMS=y), so tcp_register_congestion_control,
+          # tcp_unregister_congestion_control, tcp_prot and tcpv6_prot are not
+          # exported and an external brutal.ko can never be insmod'ed (verified on
+          # the device, see termux-alpine README section 4). With use_tcpbrutal on,
+          # the sources are wired into net/ipv4/brutal and built into vmlinux.
+          # Pinned to tcp-brutal module version 2.0.1.
+          PIN_TCP_BRUTAL="d2397ff8bca04a29fd2de01cf7d2d4b825224de8"
           PIN_KERNELSU="3c1240625655978f319a98398031100b80e9da7c"
           PIN_RESUKISU="3c1882886dbbb54f4aae7ddf205f8ccde32c2a34"
           PIN_SUKISU_ULTRA="b20dee702035af09cb2ecb5f35443bbc1747f3e6"
@@ -245,6 +263,9 @@ jobs:
 
           # NoMount (pinned in verified mode, else dev tip)
           emit nomount_commit "$(pick "$PIN_NOMOUNT" https://github.com/maxsteeel/nomount.git refs/heads/dev)"
+
+          # TCP Brutal source (pinned in verified mode, else the master tip)
+          emit tcp_brutal_commit "$(pick "$PIN_TCP_BRUTAL" https://github.com/HyNetworks/tcp-brutal.git refs/heads/master)"
 
           # KernelSU-Next manager - always built from the official repo's dev branch.
           # pershoot's fork is used only for the kernel SUSFS integration (root_commit below),
@@ -548,6 +569,8 @@ jobs:
           [ "${{ inputs.use_unicode }}" = "true" ] && FEATURES="${FEATURES}Unicode+"
           [ "${{ inputs.use_bpf }}" = "true" ] && FEATURES="${FEATURES}BPF+"
           [ "${{ inputs.use_perf }}" = "true" ] && FEATURES="${FEATURES}Perf+"
+          [ "${{ inputs.use_vdac }}" = "true" ] && FEATURES="${FEATURES}VDAC+"
+          [ "${{ inputs.use_tcpbrutal }}" = "true" ] && FEATURES="${FEATURES}TCPBrutal+"
           echo "feature_set=${FEATURES%+}" >> "$GITHUB_OUTPUT"
 
       - name: Clone shared source repos once
@@ -764,6 +787,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}
@@ -793,6 +817,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}
@@ -822,6 +847,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}
@@ -851,6 +877,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}
@@ -880,6 +907,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}
@@ -909,6 +937,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}
@@ -938,6 +967,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      tcp_brutal_commit: ${{ needs.resolve-sources.outputs.tcp_brutal_commit }}
       brand_name: ${{ inputs.brand_name }}
       os_patch_level: ${{ inputs.os_patch_level }}
       bypass: ${{ inputs.bypass }}

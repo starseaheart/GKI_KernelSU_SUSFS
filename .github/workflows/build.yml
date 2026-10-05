@@ -72,6 +72,11 @@ on:
         required: false
         type: boolean
         default: true
+      tcp_brutal_commit:
+        description: "Pinned HyNetworks/tcp-brutal commit (used when the TCPBrutal feature is on)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build-gki:
@@ -353,6 +358,34 @@ jobs:
 
     - name: Setup Misc Configs
       uses: ./.github/actions/misc
+
+    # Virtual USB DAC (config only). dummy_hcd provides dummy_udc.0 / dummy_hcd.0
+    # so f_uac2 can be bound to a software UDC while the phone stays USB host for
+    # the real DAC; it cannot be shipped as an external module because
+    # usb_gadget_probe_driver is not exported by GKI. SND_VERBOSE_PROCFS makes
+    # /proc/asound/cardN/pcmXp/sub0/ exist for both cards, which the gadget card
+    # needs (it has no stream0).
+    - name: Virtual USB DAC kernel support
+      if: contains(inputs.feature_set, 'VDAC')
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_USB_DUMMY_HCD=y
+          CONFIG_SND_VERBOSE_PROCFS=y
+          CONFIG_USB_GADGET=y
+          CONFIG_USB_CONFIGFS=y
+          CONFIG_USB_CONFIGFS_F_UAC2=y
+          CONFIG_USB_F_UAC2=y
+          CONFIG_SND_USB_AUDIO=y
+
+    # TCP Brutal: out-of-tree congestion control built into net/ipv4. Must stay
+    # after Setup Networking (BBRv3 patches touch net/ipv4) and before the build.
+    - name: Integrate TCP Brutal
+      if: contains(inputs.feature_set, 'TCPBrutal')
+      uses: ./.github/actions/tcp-brutal
+      with:
+        commit: ${{ inputs.tcp_brutal_commit }}
+        kernel_version: ${{ inputs.kernel_version }}
 
     - name: Enable BPF Stack (BTF + eBPF + FUSE-BPF)
       if: contains(inputs.feature_set, 'BPF')

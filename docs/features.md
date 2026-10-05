@@ -64,6 +64,7 @@ Kernel-based su and root access management for Android.
 | Conntrack / connmark | Connection marking for packet classification | `CONFIG_NF_CONNTRACK` / `CONFIG_NET_ACT_CONNMARK` |
 | CIFS | SMB/CIFS network filesystem | `CONFIG_CIFS` |
 | TTL Target | Network packet manipulation | `CONFIG_IP_NF_TARGET_TTL` / `CONFIG_IP6_NF_TARGET_HL` |
+| TCP Brutal | Fixed-rate congestion control for low-loss links of known bandwidth. Opt-in: the `use_tcpbrutal` build input wires the out-of-tree sources into `net/ipv4/brutal` and builds them into vmlinux (`CONFIG_TCP_CONG_BRUTAL=y`) — the only way to get it on GKI, since the symbols an external module needs are not exported. | [HyNetworks/tcp-brutal](https://github.com/HyNetworks/tcp-brutal) |
 
 ---
 
@@ -81,6 +82,14 @@ Kernel-based su and root access management for Android.
 |---------|-------------|--------|
 | NTSync | High-performance synchronization primitives compatible with Windows NT kernel API. | [WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches/tree/main/common/ntsync) |
 | Performance Tuning | Kernel configuration and tuning options | [WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches/tree/main/common) |
+
+---
+
+## USB & Audio
+
+| Feature | Description | Source |
+|---------|-------------|--------|
+| Virtual USB DAC | Opt-in via the `use_vdac` build input: `CONFIG_USB_DUMMY_HCD=y` adds a software UDC (`dummy_udc.0` / `dummy_hcd.0`) so the phone can host an f_uac2 gadget while its real controller stays USB host for the physical DAC; `CONFIG_SND_VERBOSE_PROCFS=y` makes `/proc/asound/cardN/pcmXp/sub0/` exist for the gadget card, which has no `stream0`. Both have to be built in — `usb_gadget_probe_driver` is not exported by GKI. | kernel config |
 
 ---
 

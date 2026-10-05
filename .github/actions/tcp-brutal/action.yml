@@ -1,0 +1,92 @@
+name: 'TCP Brutal congestion control'
+description: 'Wire TCP Brutal (HyNetworks/tcp-brutal) into net/ipv4 and build it into vmlinux'
+
+inputs:
+  commit:
+    description: 'HyNetworks/tcp-brutal commit (full 40-character SHA)'
+    required: true
+  kernel_version:
+    description: 'Kernel version (e.g., 6.6)'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Integrate TCP Brutal into net/ipv4
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        COMMIT="${{ inputs.commit }}"
+        if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "TCP Brutal commit must be a full 40-character SHA (got: ${COMMIT:-empty})." >&2
+          exit 2
+        fi
+
+        SRC="${{ github.workspace }}/.tcp-brutal-src"
+        rm -rf "$SRC"
+        git clone --no-checkout https://github.com/HyNetworks/tcp-brutal.git "$SRC"
+        git -C "$SRC" fetch --depth=1 origin "$COMMIT"
+        git -C "$SRC" checkout --detach "$COMMIT"
+        actual="$(git -C "$SRC" rev-parse HEAD)"
+        if [ "$actual" != "$COMMIT" ]; then
+          echo "TCP Brutal commit mismatch: expected $COMMIT, got $actual." >&2
+          exit 1
+        fi
+
+        DEST="net/ipv4/brutal"
+        rm -rf "$DEST"
+        mkdir -p "$DEST"
+        cp "$SRC/brutal.h" "$SRC/brutal_cc.c" "$SRC/brutal_rules.c" "$SRC/brutal_sockopt.c" "$DEST/"
+        cp "$SRC/LICENSE" "$DEST/LICENSE"
+
+        # Upstream ships this as a DKMS module (obj-m plus brutal-objs). In-tree it
+        # becomes a built-in: net/ipv4/Makefile descends into net/ipv4/brutal/.
+        cat > "$DEST/Makefile" <<'MAKEFILE'
+        # SPDX-License-Identifier: GPL-3.0
+        obj-$(CONFIG_TCP_CONG_BRUTAL) += brutal.o
+        brutal-y := brutal_cc.o brutal_rules.o brutal_sockopt.o
+
+        # Kernels carrying the BBRv3 patchset replace the min_tso_segs hook with
+        # tso_segs(sk, mss_now). No version macro covers that, so probe the header
+        # exactly like upstream DKMS Makefile does.
+        TCP_H := $(firstword $(wildcard $(srctree)/include/net/tcp.h))
+        ifneq ($(shell grep -qF '(*tso_segs)(struct sock *sk, unsigned int mss_now)' $(TCP_H) 2>/dev/null && echo y),)
+        ccflags-y += -DBRUTAL_HAVE_TSO_SEGS
+        endif
+        MAKEFILE
+
+        # Kconfig entry, placed next to the other congestion controls.
+        cat > "$DEST/Kconfig" <<'KCONFIG'
+        # SPDX-License-Identifier: GPL-3.0
+        config TCP_CONG_BRUTAL
+        	bool "TCP Brutal"
+        	depends on TCP_CONG_ADVANCED
+        	default n
+        	help
+        	  TCP Brutal is a congestion control that sends at a fixed rate
+        	  instead of probing for bandwidth. It targets low-loss links
+        	  whose bottleneck rate is known (a proxy server, for example)
+        	  and is configured per socket through the TCP_BRUTAL_PARAMS
+        	  setsockopt option. Rules can also be managed through
+        	  /proc/net/tcp_brutal/rules. If unsure, say N.
+        KCONFIG
+
+        # Hook the new directory into net/ipv4. Append only, so the BBRv3 patch
+        # applied earlier by the networking step is never disturbed.
+        if ! grep -q 'net/ipv4/brutal/Kconfig' net/ipv4/Kconfig; then
+          { echo; echo 'source "net/ipv4/brutal/Kconfig"'; } >> net/ipv4/Kconfig
+        fi
+        if ! grep -q 'brutal/' net/ipv4/Makefile; then
+          echo 'obj-$(CONFIG_TCP_CONG_BRUTAL) += brutal/' >> net/ipv4/Makefile
+        fi
+
+        echo "[+] TCP Brutal wired into net/ipv4 (tcp-brutal $(git -C "$SRC" rev-parse --short=12 HEAD))"
+
+    - name: Enable TCP Brutal kernel config
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BRUTAL=y
