@@ -114,6 +114,14 @@ on:
         description: "TCP Brutal congestion control built into the kernel"
         type: boolean
         default: false
+      tcp_brutal_module:
+        description: "TCP Brutal as a loadable .ko (module mode: brutal.ko + auto-insmod module zip)"
+        type: boolean
+        default: false
+      use_kpm:
+        description: "KPM (KernelPatch Module) support, SukiSU-Ultra only"
+        type: boolean
+        default: false
       test_release_notes:
         description: "Render release notes preview only (skip all builds + release)"
         type: boolean
@@ -570,7 +578,14 @@ jobs:
           [ "${{ inputs.use_bpf }}" = "true" ] && FEATURES="${FEATURES}BPF+"
           [ "${{ inputs.use_perf }}" = "true" ] && FEATURES="${FEATURES}Perf+"
           [ "${{ inputs.use_vdac }}" = "true" ] && FEATURES="${FEATURES}VDAC+"
-          [ "${{ inputs.use_tcpbrutal }}" = "true" ] && FEATURES="${FEATURES}TCPBrutal+"
+          [ "${{ inputs.use_kpm }}" = "true" ] && FEATURES="${FEATURES}KPM+"
+          if [ "${{ inputs.use_tcpbrutal }}" = "true" ] || [ "${{ inputs.tcp_brutal_module }}" = "true" ]; then
+            FEATURES="${FEATURES}TCPBrutal+"
+          fi
+          # Module mode is a second token on top of TCPBrutal: the source wiring is
+          # identical, only CONFIG_TCP_CONG_BRUTAL switches from y to m (and the
+          # build then also ships brutal.ko).
+          [ "${{ inputs.tcp_brutal_module }}" = "true" ] && FEATURES="${FEATURES}TCPBrutalKO+"
           echo "feature_set=${FEATURES%+}" >> "$GITHUB_OUTPUT"
 
       - name: Clone shared source repos once

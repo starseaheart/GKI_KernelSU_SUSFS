@@ -232,6 +232,25 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
           CONFIG_KSU_SUSFS_SUS_MAP=n
 
+    # KPM (KernelPatch Module) support. Only SukiSU-Ultra ships a "config KPM"
+    # entry (SukiSU-Ultra/kernel/Kconfig: depends on KSU && 64BIT, selects
+    # KALLSYMS + KALLSYMS_ALL, both already =y in the GKI defconfig) and the pinned
+    # manager exposes the KPM page. Every other root has no such symbol, so patch
+    # the defconfig only for SukiSU-Ultra instead of writing an unknown
+    # CONFIG_KPM line into it.
+    - name: Enable KPM (SukiSU-Ultra only)
+      if: contains(inputs.feature_set, 'KPM') && inputs.root_flavor == 'sukisu-ultra'
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_KPM=y
+
+    - name: Report unsupported KPM request
+      if: contains(inputs.feature_set, 'KPM') && inputs.root_flavor != 'sukisu-ultra'
+      shell: bash
+      run: |
+        echo "::warning::KPM was requested but root_flavor=${{ inputs.root_flavor }} has no CONFIG_KPM symbol; skipping (only SukiSU-Ultra implements KPM)."
+
     - name: Resolve SUSFS commit
       id: susfs-cm
       shell: bash
@@ -386,7 +405,8 @@ jobs:
           CONFIG_USB_F_UAC2=y
           CONFIG_SND_USB_AUDIO=y
 
-    # TCP Brutal: out-of-tree congestion control built into net/ipv4. Must stay
+    # TCP Brutal: out-of-tree congestion control wired into net/ipv4 -- built into
+    # vmlinux (default) or as the loadable brutal.ko (tcp_brutal_module). Must stay
     # after Setup Networking (BBRv3 patches touch net/ipv4) and before the build.
     - name: Integrate TCP Brutal
       if: contains(inputs.feature_set, 'TCPBrutal')
@@ -394,6 +414,10 @@ jobs:
       with:
         commit: ${{ inputs.tcp_brutal_commit }}
         kernel_version: ${{ inputs.kernel_version }}
+        # Module mode (=m) keeps the source wiring but ships brutal.ko instead of
+        # building it into vmlinux; the mode is carried in feature_set so that the
+        # reusable workflows do not need another input.
+        mode: ${{ contains(inputs.feature_set, 'TCPBrutalKO') && 'module' || 'builtin' }}
 
     - name: Enable BPF Stack (BTF + eBPF + FUSE-BPF)
       if: contains(inputs.feature_set, 'BPF')
@@ -599,6 +623,136 @@ jobs:
       with:
         version: ${{ inputs.version }}
 
+    # TCP Brutal module mode: kleaf wrote the .ko next to the Image (it is declared
+    # through module_implicit_outs). Ship it twice -- the bare brutal.ko and a
+    # KernelSU/Magisk module that insmods it during post-fs-data, so the congestion
+    # control is back after every reboot.
+    - name: Collect TCP Brutal module
+      if: contains(inputs.feature_set, 'TCPBrutalKO')
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        MODULE_NAME="brutal.ko"
+        OUT="${GITHUB_WORKSPACE}/tcp_brutal_module"
+        rm -rf "$OUT"
+        mkdir -p "$OUT"
+
+        CANDIDATES=(
+          "${GITHUB_WORKSPACE}/kernel/bazel-bin/common/kernel_aarch64/net/ipv4/brutal/${MODULE_NAME}"
+          "/home/runner/out/dist/net/ipv4/brutal/${MODULE_NAME}"
+          "/home/runner/out/dist/${MODULE_NAME}"
+        )
+        FOUND=""
+        for candidate in "${CANDIDATES[@]}"; do
+          if [ -f "$candidate" ]; then
+            FOUND="$candidate"
+            break
+          fi
+        done
+        if [ -z "$FOUND" ]; then
+          FOUND="$(find "${GITHUB_WORKSPACE}/kernel" -name "$MODULE_NAME" -type f -print -quit 2>/dev/null || true)"
+        fi
+        if [ -z "$FOUND" ]; then
+          FOUND="$(find /home/runner/out -name "$MODULE_NAME" -type f -print -quit 2>/dev/null || true)"
+        fi
+        if [ -z "$FOUND" ]; then
+          echo "::error::module mode was requested but no ${MODULE_NAME} was produced"
+          exit 1
+        fi
+
+        cp "$FOUND" "$OUT/${MODULE_NAME}"
+        echo "Collected ${FOUND}"
+
+        # Image and module must agree on vermagic, otherwise insmod refuses the
+        # module at runtime.
+        IMAGE_VER="$(strings "${GITHUB_WORKSPACE}/AnyKernel3/Image" | grep -m1 '^Linux version ' | sed 's/^Linux version //' | awk '{print $1}' || true)"
+        MOD_VER="$(modinfo -F vermagic "$OUT/${MODULE_NAME}" 2>/dev/null | awk '{print $1}' || true)"
+        echo "Image version string: ${IMAGE_VER:-unknown}"
+        echo "Module vermagic    : ${MOD_VER:-unknown}"
+        if [ -n "$IMAGE_VER" ] && [ -n "$MOD_VER" ] && [ "$IMAGE_VER" != "$MOD_VER" ]; then
+          echo "::error::${MODULE_NAME} vermagic (${MOD_VER}) does not match the built Image (${IMAGE_VER})"
+          exit 1
+        fi
+        modinfo "$OUT/${MODULE_NAME}" | sed -n '1,12p' || true
+
+        # Auto-insmod module for KernelSU / Magisk.
+        KSUSRC="${GITHUB_WORKSPACE}/tcp_brutal_ksu_module"
+        rm -rf "$KSUSRC"
+        mkdir -p "$KSUSRC"
+        cp "$OUT/${MODULE_NAME}" "$KSUSRC/${MODULE_NAME}"
+        cp "${GITHUB_WORKSPACE}/kernel/common/net/ipv4/brutal/LICENSE" "$KSUSRC/LICENSE"
+
+        VERSION_STR="${IMAGE_VER:-unknown}"
+        cat > "$KSUSRC/module.prop" <<PROP
+        id=tcp_brutal
+        name=TCP Brutal (module mode)
+        version=${VERSION_STR}
+        versionCode=1
+        author=GKI_KernelSU_SUSFS CI
+        description=Loads brutal.ko at boot (TCP Brutal congestion control) for kernel ${VERSION_STR}. Built as an in-tree module, so it only loads on the kernel built in the same run.
+        PROP
+
+        cat > "$KSUSRC/post-fs-data.sh" <<'SCRIPT'
+        #!/system/bin/sh
+        MODDIR=${0%/*}
+        LOG="$MODDIR/insmod.log"
+
+        if [ ! -f "$MODDIR/brutal.ko" ]; then
+          echo "$(date) tcp_brutal: brutal.ko missing" >> "$LOG"
+          exit 0
+        fi
+
+        # Already available (built into the kernel or loaded by an earlier run)?
+        if grep -qw brutal /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+          exit 0
+        fi
+
+        if insmod "$MODDIR/brutal.ko" 2>>"$LOG"; then
+          echo "$(date) tcp_brutal: loaded by post-fs-data" >> "$LOG"
+        else
+          echo "$(date) tcp_brutal: post-fs-data insmod failed, service.sh will retry" >> "$LOG"
+        fi
+        SCRIPT
+
+        cat > "$KSUSRC/service.sh" <<'SCRIPT'
+        #!/system/bin/sh
+        MODDIR=${0%/*}
+        LOG="$MODDIR/insmod.log"
+        NAME="$MODDIR/brutal.ko"
+
+        i=0
+        while [ "$(getprop sys.boot_completed)" != "1" ] && [ "$i" -lt 60 ]; do
+          sleep 5
+          i=$((i + 1))
+        done
+
+        [ -f "$NAME" ] || exit 0
+        if grep -qw brutal /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+          exit 0
+        fi
+        if insmod "$NAME" 2>>"$LOG"; then
+          echo "$(date) tcp_brutal: loaded by service" >> "$LOG"
+        else
+          echo "$(date) tcp_brutal: insmod failed, check vermagic/Module.symvers" >> "$LOG"
+        fi
+        SCRIPT
+
+        cat > "$KSUSRC/uninstall.sh" <<'SCRIPT'
+        #!/system/bin/sh
+        # The congestion control stays registered until the next reboot; rmmod is
+        # best effort only (it fails while a socket still uses brutal).
+        rmmod brutal 2>/dev/null || true
+        SCRIPT
+
+        chmod 0755 "$KSUSRC/post-fs-data.sh" "$KSUSRC/service.sh" "$KSUSRC/uninstall.sh"
+        chmod 0644 "$KSUSRC/module.prop" "$KSUSRC/brutal.ko" "$KSUSRC/LICENSE"
+
+        rm -f "$OUT/TCP-Brutal-Module.zip"
+        ( cd "$KSUSRC" && zip -q -9 -r "$OUT/TCP-Brutal-Module.zip" module.prop post-fs-data.sh service.sh uninstall.sh brutal.ko LICENSE )
+        echo "Module package contents:"
+        unzip -l "$OUT/TCP-Brutal-Module.zip"
+
     - name: Consolidated Build Summary
       if: always()
       shell: bash
@@ -703,6 +857,15 @@ jobs:
         name: ${{ steps.extract.outputs.file_name }}-AnyKernel3
         path: ${{ github.workspace }}/AnyKernel3/**
         if-no-files-found: ignore
+        compression-level: 9
+
+    - name: Upload TCP Brutal module
+      if: contains(inputs.feature_set, 'TCPBrutalKO')
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.extract.outputs.file_name }}-TCPBrutal-Module
+        path: ${{ github.workspace }}/tcp_brutal_module/**
+        if-no-files-found: error
         compression-level: 9
 
     - name: Write Build-verified only artifact metadata

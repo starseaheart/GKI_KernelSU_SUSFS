@@ -1,5 +1,5 @@
 name: 'TCP Brutal congestion control'
-description: 'Wire TCP Brutal (HyNetworks/tcp-brutal) into net/ipv4 and build it into vmlinux'
+description: 'Wire TCP Brutal (HyNetworks/tcp-brutal) into net/ipv4, built into vmlinux or shipped as brutal.ko'
 
 inputs:
   commit:
@@ -8,6 +8,10 @@ inputs:
   kernel_version:
     description: 'Kernel version (e.g., 6.6)'
     required: true
+  mode:
+    description: "builtin = CONFIG_TCP_CONG_BRUTAL=y (no module needed), module = CONFIG_TCP_CONG_BRUTAL=m plus a loadable brutal.ko"
+    required: false
+    default: builtin
 
 runs:
   using: "composite"
@@ -42,7 +46,10 @@ runs:
         cp "$SRC/LICENSE" "$DEST/LICENSE"
 
         # Upstream ships this as a DKMS module (obj-m plus brutal-objs). In-tree it
-        # becomes a built-in: net/ipv4/Makefile descends into net/ipv4/brutal/.
+        # is either a built-in (mode=builtin) or an in-tree module (mode=module):
+        # net/ipv4/Makefile descends into net/ipv4/brutal/ in both cases and
+        # CONFIG_TCP_CONG_BRUTAL picks y or m. The Kconfig entry is a tristate so
+        # that =m is actually selectable.
         cat > "$DEST/Makefile" <<'MAKEFILE'
         # SPDX-License-Identifier: GPL-3.0
         obj-$(CONFIG_TCP_CONG_BRUTAL) += brutal.o
@@ -61,7 +68,7 @@ runs:
         cat > "$DEST/Kconfig" <<'KCONFIG'
         # SPDX-License-Identifier: GPL-3.0
         config TCP_CONG_BRUTAL
-        	bool "TCP Brutal"
+        	tristate "TCP Brutal"
         	depends on TCP_CONG_ADVANCED
         	default n
         	help
@@ -82,11 +89,114 @@ runs:
           echo 'obj-$(CONFIG_TCP_CONG_BRUTAL) += brutal/' >> net/ipv4/Makefile
         fi
 
-        echo "[+] TCP Brutal wired into net/ipv4 (tcp-brutal $(git -C "$SRC" rev-parse --short=12 HEAD))"
+        echo "[+] TCP Brutal wired into net/ipv4 (tcp-brutal $(git -C "$SRC" rev-parse --short=12 HEAD), mode=${{ inputs.mode }})"
 
-    - name: Enable TCP Brutal kernel config
+    # Module mode only. kleaf refuses any OUT_DIR file that was not declared up
+    # front ("The list implicit_outs + module_outs must include all *.ko files in
+    # OUT_DIR"). GKI already declares its own in-tree modules through
+    # module_implicit_outs (get_gki_modules_list), so append brutal.ko to every
+    # such entry instead of replacing it. make_goals for kernel_aarch64 already
+    # contains "modules", so nothing else has to be forced.
+    #
+    # kleaf's kmi_symbol_list_strict_mode check only verifies that every symbol of
+    # the KMI list is still exported (it computes set(kmi) - set(ksymtab)), so the
+    # extra exports brutal.ko needs (tcp_register_congestion_control, tcp_prot,
+    # ...) are allowed. CONFIG_TRIM_UNUSED_KSYMS keeps them because an in-tree
+    # module references them -- which is exactly why a hand-built out-of-tree
+    # brutal.ko could never load: nothing referenced them, so they were trimmed.
+    - name: Declare the kleaf module output
+      if: inputs.mode == 'module'
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        if [ ! -f common/BUILD.bazel ]; then
+          echo "Legacy build.sh checkout: no bazel module declaration needed."
+          exit 0
+        fi
+
+        python3 - <<'PY'
+        import pathlib
+        import sys
+
+        module = "net/ipv4/brutal/brutal.ko"
+        path = pathlib.Path("common/BUILD.bazel")
+        text = path.read_text()
+
+        if module in text:
+            print("kleaf module declaration already present")
+            sys.exit(0)
+
+        key = '"module_implicit_outs"'
+
+
+        def value_end(blob, start):
+            """Offset of the first comma that closes the value at start."""
+            depth = 0
+            quote = None
+            i = start
+            while i < len(blob):
+                char = blob[i]
+                if quote:
+                    if char == "\\":
+                        i += 2
+                        continue
+                    if char == quote:
+                        quote = None
+                elif char in "\"'":
+                    quote = char
+                elif char in "([{":
+                    depth += 1
+                elif char in ")]}":
+                    if depth == 0:
+                        return i
+                    depth -= 1
+                elif char == "," and depth == 0:
+                    return i
+                i += 1
+            raise SystemExit("ERROR: unterminated module_implicit_outs value")
+
+
+        patched = 0
+        cursor = 0
+        while True:
+            index = text.find(key, cursor)
+            if index < 0:
+                break
+            colon = text.index(":", index + len(key))
+            start = colon + 1
+            while start < len(text) and text[start] in " \t":
+                start += 1
+            end = value_end(text, start)
+            value = text[start:end].rstrip()
+            replacement = '(%s) + ["%s"]' % (value, module)
+            text = text[:start] + replacement + text[end:]
+            cursor = start + len(replacement)
+            patched += 1
+
+        if patched == 0:
+            raise SystemExit("ERROR: no module_implicit_outs entry in common/BUILD.bazel")
+
+        path.write_text(text)
+        print("Declared %s in %d module_implicit_outs entry/entries:" % (module, patched))
+        for line in text.splitlines():
+            if module in line:
+                print("  " + line.strip())
+        PY
+
+    - name: Enable TCP Brutal kernel config (built into vmlinux)
+      if: inputs.mode != 'module'
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BRUTAL=y
+
+    - name: Enable TCP Brutal kernel config (in-tree module)
+      if: inputs.mode == 'module'
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BRUTAL=m

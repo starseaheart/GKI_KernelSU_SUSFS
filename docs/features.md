@@ -14,6 +14,12 @@ Kernel-based su and root access management for Android.
 | KernelSU-Next | Created by [rifsxd](https://github.com/rifsxd). SUSFS-integrated builds sourced from pershoot. | [KernelSU-Next/KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) · [pershoot/KernelSU-Next](https://github.com/pershoot/KernelSU-Next) |
 | ReSukiSU | Fork of SukiSU, also has its own SUSFS-integrated branch. | [ReSukiSU/ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) |
 
+### Optional root features
+
+| Feature | Description | Source |
+|---------|-------------|--------|
+| KPM (KernelPatch Module) | Opt-in via the `use_kpm` build input: `CONFIG_KPM=y` compiles SukiSU-Ultra's in-kernel KPM loader, which is what the manager's KPM page drives to load/unload `.kpm` modules at runtime. Only SukiSU-Ultra implements the symbol (`SukiSU-Ultra/kernel/Kconfig`), so for every other root flavor the input is skipped with a `::warning::` instead of writing an unknown `CONFIG_KPM` line into `gki_defconfig`. It `select`s `KALLSYMS` + `KALLSYMS_ALL`, both already `=y` in the GKI defconfig. | [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) |
+
 ---
 
 ## Root Hiding
@@ -64,7 +70,7 @@ Kernel-based su and root access management for Android.
 | Conntrack / connmark | Connection marking for packet classification | `CONFIG_NF_CONNTRACK` / `CONFIG_NET_ACT_CONNMARK` |
 | CIFS | SMB/CIFS network filesystem | `CONFIG_CIFS` |
 | TTL Target | Network packet manipulation | `CONFIG_IP_NF_TARGET_TTL` / `CONFIG_IP6_NF_TARGET_HL` |
-| TCP Brutal | Fixed-rate congestion control for low-loss links of known bandwidth. Opt-in: the `use_tcpbrutal` build input wires the out-of-tree sources into `net/ipv4/brutal` and builds them into vmlinux (`CONFIG_TCP_CONG_BRUTAL=y`) — the only way to get it on GKI, since the symbols an external module needs are not exported. | [HyNetworks/tcp-brutal](https://github.com/HyNetworks/tcp-brutal) |
+| TCP Brutal | Fixed-rate congestion control for low-loss links of known bandwidth. Opt-in through two build inputs that share the same source wiring (`net/ipv4/brutal`, `CONFIG_TCP_CONG_ADVANCED=y`): `use_tcpbrutal` builds it into vmlinux (`CONFIG_TCP_CONG_BRUTAL=y`, nothing to load), while `tcp_brutal_module` builds it as an in-tree module (`=m`) and ships two extra artifacts — the bare `brutal.ko` and a KernelSU/Magisk module that `insmod`s it from `post-fs-data.sh`. Module mode is the only way to get a loadable `.ko`: GKI trims `tcp_register_congestion_control` / `tcp_unregister_congestion_control` / `tcp_prot` / `tcpv6_prot` (`CONFIG_TRIM_UNUSED_KSYMS=y`), so a hand-built out-of-tree module never loads, whereas an in-tree module makes the trim pass keep those exports. A shipped `brutal.ko` only loads on the kernel built in the same run (vermagic + symbol CRCs). | [HyNetworks/tcp-brutal](https://github.com/HyNetworks/tcp-brutal) |
 
 ---
 
